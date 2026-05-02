@@ -67,10 +67,28 @@ jobs:
           make -j$(nproc)
           sudo make install
           cd ../..
-          # Run server in background with local mode (no persistent dir needed for short-lived workflow)
-          telegram-bot-api --api-id ${{ secrets.TELEGRAM_API_ID }} --api-hash ${{ secrets.TELEGRAM_API_HASH }} --local --http-port 8081 &
-          # Wait for server to start (adjust sleep if needed)
-          sleep 10
+
+          # Start server in background, redirect output to log file for debugging
+          telegram-bot-api \
+            --api-id ${{ secrets.TELEGRAM_API_ID }} \
+            --api-hash ${{ secrets.TELEGRAM_API_HASH }} \
+            --local \
+            --http-port 8081 \
+            > /tmp/tgapi.log 2>&1 &
+
+          echo "Waiting for Telegram Bot API server to be ready..."
+          for i in {1..30}; do
+            if curl -s "http://localhost:8081/" > /dev/null 2>&1; then
+              echo "Server is up after ${i} seconds."
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Server failed to start after 30 seconds. Log output:"
+              cat /tmp/tgapi.log
+              exit 1
+            fi
+            sleep 1
+          done
 
       - name: Send release notes to Telegram (via local server)
         env:
@@ -78,7 +96,6 @@ jobs:
           TG_CHAT: -1002692922050
         run: |
           BODY=$(cat body.txt)
-          # Process the body for Telegram Markdown compatibility, plus escape special characters
           PROCESSED_BODY=$(echo "$BODY" | sed 's/^\* \*\*/↪ \*\*/g; s/^\* `/↪ \*\*/g; s/`/\*/g; s/^\* /\↪/g; s/\*\*/\*/g; s/###//g; s/^- /↪ /g; /^==/d; s/_/\\_/g; s/\*/\\*/g; s/`/\\`/g')
           NL=$'\n'
           APKS=""
@@ -102,7 +119,6 @@ jobs:
 
           APKs:
           ${APKS}"
-          # Truncate if too long
           MSG=${MSG:0:4000}
           curl -X POST "http://localhost:8081/bot$TG_TOKEN/sendMessage" \
             -d chat_id="$TG_CHAT" \
